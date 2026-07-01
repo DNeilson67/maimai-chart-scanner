@@ -16,6 +16,18 @@ const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12h
 // Fallback colors if the API doesn't supply one, keyed by difficulty order.
 const FALLBACK_DIFF_COLORS = ['#4fc84f', '#e8a72c', '#f24a5a', '#a855f7', '#f4ecff', '#35e6de'];
 
+// Which OCR language pack to load — see setOcrLangPriority in the OCR
+// section below for why this changes recognition, not just a hint.
+const OCR_LANG_PRIORITY_KEY = 'chartscan_ocr_lang_priority';
+function loadOcrLangPriority() {
+  try {
+    const saved = localStorage.getItem(OCR_LANG_PRIORITY_KEY);
+    return saved === 'en' ? 'en' : 'ja';
+  } catch (e) {
+    return 'ja';
+  }
+}
+
 const state = {
   data: null,          // raw fetched data
   songs: [],           // flattened songs w/ normalized fields
@@ -27,6 +39,7 @@ const state = {
   ocrBusy: false,
   ocrWorker: null,      // reused across scans — avoids reloading the engine every time
   ocrLangs: null,        // which language packs actually loaded, for diagnostics
+  ocrLangPriority: loadOcrLangPriority(), // 'ja' or 'en' — which language pack to load, see setOcrLangPriority
   currentSong: null,
   candidateList: [],    // songs shown in the currently open modal, for prev/next + filmstrip
   candidateIndex: -1,
@@ -54,6 +67,7 @@ const el = {
   rescanBtn: $('#rescanBtn'),
   ocrDebug: $('#ocrDebug'),
   ocrText: $('#ocrText'),
+  langToggle: $('#langToggle'),
   searchInput: $('#searchInput'),
   autocomplete: $('#autocomplete'),
   emptySection: $('#emptySection'),
@@ -320,6 +334,23 @@ el.rescanBtn.addEventListener('click', resetScanner);
 el.uploadBtn.addEventListener('click', () => el.fileInput.click());
 el.fileInput.addEventListener('change', handleFileUpload);
 
+function syncLangToggleUI() {
+  if (!el.langToggle) return;
+  el.langToggle.querySelectorAll('.lang-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.lang === state.ocrLangPriority);
+  });
+}
+
+if (el.langToggle) {
+  el.langToggle.querySelectorAll('.lang-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      setOcrLangPriority(btn.dataset.lang);
+      syncLangToggleUI();
+    });
+  });
+  syncLangToggleUI();
+}
+
 async function startCamera() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     el.scanProgress.textContent = 'Camera unavailable — this page needs to be served over HTTPS (or http://localhost), not opened directly as a file.';
@@ -583,25 +614,59 @@ function resetScanner() {
 
 // The worker is created once and reused for every scan in the session —
 // loading the engine + language data is the slow part, so re-creating it
-// per scan would be wasteful and slow. Torn down on page unload.
-// maimai's international dataset is mostly Japanese-titled, with some
-// English/Korean and occasional Chinese-origin characters, so we ask for
-// all three scripts. If the full set fails to load (flaky connection, a
-// blocked CDN, etc.) we retry with a smaller set instead of just silently
-// failing — and say so, rather than leaving it as a generic "OCR failed".
-const OCR_LANG_SETS = [
-  ['eng', 'jpn', 'chi_sim'],
-  ['eng', 'jpn'],
-  ['eng'],
-];
+// per scan would be wasteful and slow. Torn down on page unload (or when
+// the language priority toggle changes — see setOcrLangPriority).
+//
+// Tesseract doesn't "prioritize" between languages within a single
+// combined-language pass — every loaded script's glyph set is a candidate
+// for every character, all the time. That's exactly why a stylized Latin
+// logo like "HERA" can get misread: with jpn/chi_sim also loaded, the
+// engine has far more visually-similar candidate glyphs to second-guess
+// itself against. So "priority" here means which language pack(s) actually
+// get loaded — a real, load-time choice, not just a hint.
+const OCR_LANG_SETS_BY_PRIORITY = {
+  // maimai's international dataset is mostly Japanese-titled, with some
+  // English/Korean and occasional Chinese-origin characters, and English
+  // UI chrome (difficulty banners, "BPM") appears on every screen
+  // regardless of client language — so the default keeps all three.
+  ja: [
+    ['eng', 'jpn', 'chi_sim'],
+    ['eng', 'jpn'],
+    ['eng'],
+  ],
+  // English-only: smaller/faster download, and — more importantly — no
+  // CJK glyph candidates competing with Latin ones, which is what actually
+  // fixes short stylized English titles. Falls back to adding jpn only if
+  // the English-only pack itself fails to load.
+  en: [
+    ['eng'],
+    ['eng', 'jpn'],
+  ],
+};
+
+// Swaps which language pack the OCR worker will use. Takes effect on the
+// next scan — if a worker is already loaded with the old languages, it's
+// torn down here so getOcrWorker() rebuilds it with the new priority.
+function setOcrLangPriority(priority) {
+  if (priority === state.ocrLangPriority) return;
+  state.ocrLangPriority = priority;
+  try { localStorage.setItem(OCR_LANG_PRIORITY_KEY, priority); } catch (e) { /* non-fatal */ }
+  if (state.ocrWorker) {
+    const stale = state.ocrWorker;
+    state.ocrWorker = null;
+    state.ocrLangs = null;
+    stale.terminate();
+  }
+}
 
 async function getOcrWorker() {
   if (state.ocrWorker) return state.ocrWorker;
   if (typeof Tesseract === 'undefined') throw new Error('Tesseract.js failed to load');
   const oem = (Tesseract.OEM && Tesseract.OEM.LSTM_ONLY) ?? 1;
+  const langSets = OCR_LANG_SETS_BY_PRIORITY[state.ocrLangPriority] || OCR_LANG_SETS_BY_PRIORITY.ja;
 
   let lastErr = null;
-  for (const langs of OCR_LANG_SETS) {
+  for (const langs of langSets) {
     try {
       el.scanProgress.textContent = `Loading OCR engine (${langs.join('+')})…`;
       // eslint-disable-next-line no-await-in-loop
@@ -614,7 +679,7 @@ async function getOcrWorker() {
       });
       state.ocrWorker = worker;
       state.ocrLangs = langs;
-      if (langs.length < OCR_LANG_SETS[0].length) {
+      if (langs.length < langSets[0].length) {
         console.warn(`ChartScan: OCR fell back to ${langs.join('+')} — some language packs failed to load, likely a network/CDN issue.`);
       }
       return worker;

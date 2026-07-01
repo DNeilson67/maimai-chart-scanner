@@ -408,6 +408,30 @@ input[type=file]{ display:none; }
 .type-btn:hover{ color: var(--text); }
 .type-btn.active{ background: var(--cyan); color: #052423; }
 
+.lang-toggle{
+  display: flex;
+  gap: 6px;
+  padding: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.lang-btn{
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 7px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.lang-btn:hover{ color: var(--text); }
+.lang-btn.active{ background: var(--cyan); color: #052423; }
+
 .sheet-grid{
   display:grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -704,6 +728,10 @@ footer a{ color: var(--text-dim); }
             <circle class="sweep" cx="50" cy="50" r="47" stroke-dasharray="18 400" />
           </svg>
         </div>
+      </div>
+      <div class="lang-toggle" id="langToggle" role="group" aria-label="OCR language priority">
+        <button type="button" class="lang-btn" data-lang="ja">日本語優先</button>
+        <button type="button" class="lang-btn" data-lang="en">English</button>
       </div>
       <div class="scan-progress" id="scanProgress">&nbsp;</div>
       <div class="controls">
