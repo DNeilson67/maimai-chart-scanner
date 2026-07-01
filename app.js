@@ -31,6 +31,8 @@ const state = {
   candidateList: [],    // songs shown in the currently open modal, for prev/next + filmstrip
   candidateIndex: -1,
   candidateLevelTokens: [],
+  candidateDifficultyToken: null, // difficulty code read off the banner (e.g. "master"), for sheet highlighting
+  candidateTypeToken: null,       // dx/std code read off the badge, for sheet highlighting
 };
 
 /* ---------------- DOM refs ---------------- */
@@ -299,6 +301,8 @@ function renderAutocomplete(results) {
       closeAutocomplete();
       state.candidateList = results.map((r) => r.song);
       state.candidateLevelTokens = [];
+      state.candidateDifficultyToken = null;
+      state.candidateTypeToken = null;
       openCandidateAtIndex(i);
     });
     el.autocomplete.appendChild(item);
@@ -677,12 +681,15 @@ async function runOcr(canvas) {
     el.scanProgress.textContent = 'Matching against song database…';
 
     const levelTokens = [...new Set(passes.flatMap((p) => extractLevelTokens(p.text)))];
+    const difficultyToken = passes.map((p) => extractDifficultyToken(p.text)).find(Boolean) || null;
+    const typeToken = passes.map((p) => extractTypeToken(p.text)).find(Boolean) || null;
+    const bpmToken = passes.map((p) => extractBpmToken(p.text)).find((v) => v != null) ?? null;
     // Match against all three passes' text, not just whichever the engine
     // was more confident about — short stylized titles often get read
     // correctly in one page-segmentation mode and mangled in another.
     // Combining gives every candidate word a chance to be picked up.
     const combinedText = passes.map((p) => p.text).join('\n');
-    const candidates = rankSongsByText(combinedText, levelTokens, 6);
+    const candidates = rankSongsByText(combinedText, { levelTokens, difficultyToken, typeToken, bpmToken }, 6);
 
     if (!candidates.length) {
       el.scanProgress.textContent = 'No confident match found — try manual search below, or retake the photo.';
@@ -695,6 +702,8 @@ async function runOcr(canvas) {
         : `Matched “${candidates[0].song.title}” — ${candidates.length - 1} other possible match${candidates.length > 2 ? 'es' : ''} available in the popup.`;
       state.candidateList = candidates.map((c) => c.song);
       state.candidateLevelTokens = levelTokens;
+      state.candidateDifficultyToken = difficultyToken;
+      state.candidateTypeToken = typeToken;
       openCandidateAtIndex(0);
     }
   } catch (err) {
@@ -724,7 +733,53 @@ function extractLevelTokens(text) {
   return [...new Set(matches)];
 }
 
-function rankSongsByText(text, levelTokens, limit) {
+// The difficulty banner ("BASIC"/"ADVANCED"/"EXPERT"/"MASTER"/"Re:MASTER")
+// is shown in English even on the Japanese client, so it can be matched
+// directly against the current dataset's own difficulty names rather than
+// a hardcoded/localized list. Longest name first so "Re:MASTER" is picked
+// over the "MASTER" substring it contains.
+function extractDifficultyToken(text) {
+  const normalizedText = normalize(text);
+  if (!normalizedText) return null;
+  const candidates = Object.entries(state.difficultyMeta)
+    .map(([code, meta]) => ({ code, key: normalize(meta.name || code) }))
+    .filter((c) => c.key.length >= 3)
+    .sort((a, b) => b.key.length - a.key.length);
+  const hit = candidates.find((c) => normalizedText.includes(c.key));
+  return hit ? hit.code : null;
+}
+
+// The DX/Standard badge (top-left corner — "でらっくす"/DX vs
+// "スタンダード"/STD) disambiguates songs that have both a DX and a
+// Standard chart set at the same displayed level.
+function extractTypeToken(text) {
+  const normalizedText = normalize(text);
+  if (!normalizedText) return null;
+  const typeCandidates = Object.entries(state.typeMeta).map(([code, meta]) => ({
+    code,
+    keys: [normalize(meta.name), normalize(meta.abbr)].filter((k) => k && k.length >= 2),
+  }));
+  const datasetHit = typeCandidates.find((t) => t.keys.some((k) => normalizedText.includes(k)));
+  if (datasetHit) return datasetHit.code;
+  // Fall back to the badge's EN/JP wording, mapped onto whichever dataset
+  // code looks like DX / Standard — the dataset's own name/abbr sometimes
+  // won't literally contain the on-screen badge text.
+  const dxCode = typeCandidates.find((t) => /dx/i.test(t.code))?.code;
+  const stdCode = typeCandidates.find((t) => /std|standard/i.test(t.code))?.code;
+  if (dxCode && (normalizedText.includes('でらっくす') || normalizedText.includes('deluxe'))) return dxCode;
+  if (stdCode && (normalizedText.includes('スタンダード') || normalizedText.includes('standard'))) return stdCode;
+  return null;
+}
+
+// BPM is printed plainly on the results/select screen and is a very
+// specific, largely collision-free number — a strong independent check
+// against the title/artist text match.
+function extractBpmToken(text) {
+  const m = text.match(/bpm\D{0,4}(\d{2,4})/i);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+function rankSongsByText(text, tokens, limit) {
   const rawLines = text.split('\n').map((l) => l.trim()).filter(Boolean);
   const lines = rawLines.map((l) => normalize(l)).filter((l) => l.length >= 2);
   // Individual words too — OCR often nails one part of a long/compound title
@@ -737,7 +792,8 @@ function rankSongsByText(text, levelTokens, limit) {
   const fullBlob = normalize(text);
   if (!lines.length && !words.length) return [];
 
-  const levelSet = new Set((levelTokens || []).map((t) => t.toLowerCase()));
+  const { levelTokens = [], difficultyToken = null, typeToken = null, bpmToken = null } = tokens || {};
+  const levelSet = new Set(levelTokens.map((t) => t.toLowerCase()));
 
   const scored = state.songs.map((entry) => {
     let best = 0;
@@ -750,12 +806,22 @@ function rankSongsByText(text, levelTokens, limit) {
     }
     if (entry.nTitle.length >= 3 && fullBlob.includes(entry.nTitle)) best = Math.max(best, 0.92);
 
-    // Cross-validate with the level number(s) spotted on screen — a correct
-    // level match is a strong independent signal, so nudge close title
-    // matches over the line when a sheet's level is also present in frame.
-    if (levelSet.size && best > 0.2) {
-      const hasLevelMatch = (entry.song.sheets || []).some((s) => levelSet.has((s.level || '').toLowerCase()));
-      if (hasLevelMatch) best = Math.min(1, best + 0.12);
+    // Cross-validate against everything else visible on screen — each of
+    // these is an independent signal, so a title match that's also backed
+    // by the right level, difficulty banner, DX/Standard badge and/or BPM
+    // is far more trustworthy than title text alone, and this is what lets
+    // us tell apart songs that otherwise look identical from OCR text.
+    if (best > 0.2) {
+      const sheets = entry.song.sheets || [];
+      let bonus = 0;
+      const levelMatchSheet = levelSet.size ? sheets.find((s) => levelSet.has((s.level || '').toLowerCase())) : null;
+      if (levelMatchSheet) {
+        bonus += 0.10;
+        if (difficultyToken && levelMatchSheet.difficulty === difficultyToken) bonus += 0.08;
+      }
+      if (typeToken && sheets.some((s) => s.type === typeToken)) bonus += 0.05;
+      if (bpmToken != null && entry.song.bpm != null && Math.abs(entry.song.bpm - bpmToken) <= 1) bonus += 0.12;
+      best = Math.min(1, best + bonus);
     }
 
     return { song: entry.song, score: best };
@@ -777,7 +843,25 @@ function openCandidateAtIndex(index) {
   if (!list.length) return;
   const clamped = ((index % list.length) + list.length) % list.length;
   state.candidateIndex = clamped;
-  selectSong(list[clamped], { levelTokens: state.candidateLevelTokens });
+  selectSong(list[clamped], {
+    levelTokens: state.candidateLevelTokens,
+    difficultyToken: state.candidateDifficultyToken,
+    typeToken: state.candidateTypeToken,
+  });
+}
+
+// Picks which sheet the scan is most likely looking at. Level alone can be
+// ambiguous (a song can repeat the same displayed level across difficulties,
+// or across its DX/Standard charts) — the difficulty banner and DX/Standard
+// badge, when readable, narrow a level match down to the exact chart.
+function pickHighlightSheet(sheets, { levelTokens = [], difficultyToken, typeToken } = {}) {
+  const levelSet = new Set(levelTokens.map((t) => t.toLowerCase()));
+  if (!levelSet.size) return null;
+  const matches = sheets.filter((s) => levelSet.has((s.level || '').toLowerCase()));
+  if (!matches.length) return null;
+  const specificity = (s) => (difficultyToken && s.difficulty === difficultyToken ? 2 : 0)
+    + (typeToken && s.type === typeToken ? 1 : 0);
+  return matches.reduce((a, b) => (specificity(b) > specificity(a) ? b : a));
 }
 
 function selectSong(song, opts = {}) {
@@ -791,7 +875,11 @@ function selectSong(song, opts = {}) {
     return oa - ob;
   });
 
-  const highlightSheet = sheets.find((s) => levelTokens.includes((s.level || '').toLowerCase()));
+  const highlightSheet = pickHighlightSheet(sheets, {
+    levelTokens,
+    difficultyToken: opts.difficultyToken,
+    typeToken: opts.typeToken,
+  });
   const hasMultiple = state.candidateList.length > 1;
 
   // Some songs have both a DX and a Standard chart set (different note
