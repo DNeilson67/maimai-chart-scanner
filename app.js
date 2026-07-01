@@ -919,7 +919,7 @@ function selectSong(song, opts = {}) {
         ${song.version ? `<span class="tag">${escapeHtml(song.version)}</span>` : ''}
         ${song.category ? `<span class="tag">${escapeHtml(song.category)}</span>` : ''}
       </div>
-      <a class="yt-btn" href="https://www.youtube.com/results?search_query=${ytQuery}" target="_blank" rel="noopener noreferrer">
+      <a class="yt-btn" href="https://www.youtube.com/results?search_query=${"Maimai "+ytQuery}" target="_blank" rel="noopener noreferrer">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/></svg>
         Search on YouTube
       </a>
