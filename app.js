@@ -31,7 +31,6 @@ const state = {
   candidateList: [],    // songs shown in the currently open modal, for prev/next + filmstrip
   candidateIndex: -1,
   candidateLevelTokens: [],
-  candidateVisualScores: new Map(), // song -> cover-art similarity (0-1), when a scan ran cover matching
 };
 
 /* ---------------- DOM refs ---------------- */
@@ -292,7 +291,6 @@ function renderAutocomplete(results) {
       closeAutocomplete();
       state.candidateList = results.map((r) => r.song);
       state.candidateLevelTokens = [];
-      state.candidateVisualScores = new Map();
       openCandidateAtIndex(i);
     });
     el.autocomplete.appendChild(item);
@@ -663,26 +661,17 @@ async function runOcr(canvas) {
     el.scanProgress.textContent = 'Matching against song database…';
 
     const levelTokens = [...new Set([...extractLevelTokens(pass1.text), ...extractLevelTokens(pass2.text)])];
-    const textCandidates = rankSongsByText(best.text, levelTokens, 12);
+    const candidates = rankSongsByText(best.text, levelTokens, 6);
 
-    if (!textCandidates.length) {
+    if (!candidates.length) {
       el.scanProgress.textContent = 'No confident match found — try manual search below, or retake the photo.';
-      state.candidateVisualScores = new Map();
     } else {
-      el.scanProgress.textContent = 'Comparing cover art…';
-      const { candidates, visualScores } = await refineWithCoverMatch(canvas, textCandidates, 6);
-      state.candidateVisualScores = visualScores;
-
       // Pop the best match straight open — the popup itself has prev/next
       // and a cover filmstrip, so correcting a wrong guess is one tap away
       // rather than needing a confirmation step first.
-      const topVisual = visualScores.get(candidates[0].song);
-      const confidenceNote = topVisual != null && topVisual > COVER_MATCH_THRESHOLD
-        ? ` (text + cover match, ${Math.round(topVisual * 100)}%)`
-        : '';
       el.scanProgress.textContent = candidates.length === 1
-        ? `Matched “${candidates[0].song.title}”${confidenceNote}.`
-        : `Matched “${candidates[0].song.title}”${confidenceNote} — ${candidates.length - 1} other possible match${candidates.length > 2 ? 'es' : ''} available in the popup.`;
+        ? `Matched “${candidates[0].song.title}”.`
+        : `Matched “${candidates[0].song.title}” — ${candidates.length - 1} other possible match${candidates.length > 2 ? 'es' : ''} available in the popup.`;
       state.candidateList = candidates.map((c) => c.song);
       state.candidateLevelTokens = levelTokens;
       openCandidateAtIndex(0);
@@ -757,139 +746,6 @@ function rankSongsByText(text, levelTokens, limit) {
     .slice(0, limit);
 }
 
-/* ---------------- Cover art matching ---------------- */
-// A client-side perceptual hash (average hash) lets us compare the captured
-// photo against known song covers as a second, independent signal alongside
-// OCR text matching. This matters most in two cases OCR alone handles
-// poorly: photos that are mostly jacket art with little/no readable text,
-// and OCR misreads that still happen to score plausibly against the wrong
-// song. Hashes are cached (by cover URL) in localStorage since cover art
-// never changes, so repeat scans don't re-download/re-hash the same covers.
-const COVER_HASH_SIZE = 8; // 8x8 grayscale -> 64-bit hash
-const COVER_HASH_CACHE_KEY = 'chartscan_cover_hashes_v1';
-const COVER_MATCH_POOL = 8;   // cap how many candidate covers we fetch per scan
-const COVER_MATCH_THRESHOLD = 0.65; // similarity below this is treated as noise
-const COVER_MATCH_MAX_BONUS = 0.25; // added to the text score at similarity 1.0
-
-function loadCoverHashCache() {
-  try {
-    const raw = localStorage.getItem(COVER_HASH_CACHE_KEY);
-    return raw ? new Map(Object.entries(JSON.parse(raw))) : new Map();
-  } catch (e) {
-    return new Map(); // storage disabled/unavailable — just skip caching
-  }
-}
-const coverHashCache = loadCoverHashCache();
-
-let coverHashSaveTimer = null;
-function persistCoverHashCache() {
-  clearTimeout(coverHashSaveTimer);
-  coverHashSaveTimer = setTimeout(() => {
-    try {
-      localStorage.setItem(COVER_HASH_CACHE_KEY, JSON.stringify(Object.fromEntries(coverHashCache)));
-    } catch (e) { /* storage full/unavailable — non-fatal */ }
-  }, 500);
-}
-
-function computeAHash(source, size = COVER_HASH_SIZE) {
-  const c = document.createElement('canvas');
-  c.width = size; c.height = size;
-  const ctx = c.getContext('2d');
-  ctx.drawImage(source, 0, 0, size, size);
-  const { data } = ctx.getImageData(0, 0, size, size);
-  const gray = new Float32Array(size * size);
-  let sum = 0;
-  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
-    gray[p] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-    sum += gray[p];
-  }
-  const avg = sum / gray.length;
-  let hash = 0n;
-  for (let p = 0; p < gray.length; p++) hash = (hash << 1n) | (gray[p] >= avg ? 1n : 0n);
-  return hash;
-}
-
-// Center-square crop — a good match for the common case of photographing
-// the jacket art itself, and a rough-but-harmless approximation otherwise
-// (the visual score is only trusted above COVER_MATCH_THRESHOLD anyway).
-function centerSquareCrop(canvas) {
-  const side = Math.min(canvas.width, canvas.height);
-  const sx = (canvas.width - side) / 2;
-  const sy = (canvas.height - side) / 2;
-  const out = document.createElement('canvas');
-  out.width = side; out.height = side;
-  out.getContext('2d').drawImage(canvas, sx, sy, side, side, 0, 0, side, side);
-  return out;
-}
-
-function hammingDistance64(a, b) {
-  let x = a ^ b;
-  let count = 0;
-  while (x) { count += Number(x & 1n); x >>= 1n; }
-  return count;
-}
-
-function loadImageEl(src) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error(`failed to load ${src}`));
-    img.src = src;
-  });
-}
-
-async function getCoverHash(song) {
-  const key = song.imageUrlM || song.imageUrl;
-  if (!key) return null;
-  const cached = coverHashCache.get(key);
-  if (cached) return BigInt(`0x${cached}`);
-  try {
-    const img = await loadImageEl(key);
-    const hash = computeAHash(img);
-    coverHashCache.set(key, hash.toString(16).padStart(16, '0'));
-    persistCoverHashCache();
-    return hash;
-  } catch (e) {
-    return null; // CORS/network hiccup on this one cover — just skip it
-  }
-}
-
-// Re-scores a pool of text-matched candidates using visual similarity
-// between the captured frame and each candidate's cover art, returning the
-// reordered/trimmed list plus a song -> similarity map for display. Bounded
-// to a handful of network fetches so a noisy OCR pass doesn't turn into
-// dozens of image downloads.
-async function refineWithCoverMatch(capturedCanvas, scoredCandidates, limit) {
-  const pool = scoredCandidates.slice(0, COVER_MATCH_POOL);
-  const visualScores = new Map();
-  if (!pool.length) return { candidates: [], visualScores };
-
-  let capturedHash;
-  try {
-    capturedHash = computeAHash(centerSquareCrop(capturedCanvas));
-  } catch (e) {
-    return { candidates: pool.slice(0, limit), visualScores }; // hashing unsupported — fall back to text-only order
-  }
-
-  const hashes = await Promise.allSettled(pool.map((c) => getCoverHash(c.song)));
-  const rescored = pool.map((c, i) => {
-    const hash = hashes[i].status === 'fulfilled' ? hashes[i].value : null;
-    let combined = c.score;
-    if (hash != null) {
-      const similarity = 1 - hammingDistance64(capturedHash, hash) / 64;
-      visualScores.set(c.song, similarity);
-      if (similarity > COVER_MATCH_THRESHOLD) {
-        combined += ((similarity - COVER_MATCH_THRESHOLD) / (1 - COVER_MATCH_THRESHOLD)) * COVER_MATCH_MAX_BONUS;
-      }
-    }
-    return { song: c.song, score: combined };
-  });
-
-  rescored.sort((a, b) => b.score - a.score);
-  return { candidates: rescored.slice(0, limit), visualScores };
-}
-
 /* ---------------- Rendering: song + sheets ---------------- */
 
 // Jumps the open (or about-to-open) modal to a specific song within the
@@ -944,15 +800,12 @@ function selectSong(song, opts = {}) {
   const card = document.createElement('div');
   card.className = 'song-card';
   const ytQuery = encodeURIComponent(`${song.title || ''} ${song.artist || ''}`.trim());
-  const visualScore = state.candidateVisualScores.get(song);
-  const showCoverTag = visualScore != null && visualScore > COVER_MATCH_THRESHOLD;
   card.innerHTML = `
     <img class="cover" ${imgAttrs(song)}>
     <div class="info">
       <h2 id="modalTitle">${escapeHtml(song.title || '(untitled)')}</h2>
       <div class="artist">${escapeHtml(song.artist || 'Unknown artist')}</div>
       <div class="tags">
-        ${showCoverTag ? `<span class="tag cover-tag">Cover match ${Math.round(visualScore * 100)}%</span>` : ''}
         ${song.bpm ? `<span class="tag">BPM ${escapeHtml(String(song.bpm))}</span>` : ''}
         ${song.version ? `<span class="tag">${escapeHtml(song.version)}</span>` : ''}
         ${song.category ? `<span class="tag">${escapeHtml(song.category)}</span>` : ''}

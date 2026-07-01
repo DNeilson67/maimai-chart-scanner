@@ -361,11 +361,6 @@ input[type=file]{ display:none; }
   padding: 3px 8px;
   border-radius: 999px;
 }
-.tag.cover-tag{
-  color: var(--cyan);
-  border-color: var(--cyan);
-  font-weight: 700;
-}
 
 .yt-btn{
   display: inline-flex;
@@ -755,7 +750,7 @@ footer a{ color: var(--text-dim); }
       <h3>How the reveal works</h3>
       <p>maimai only ever shows you a whole-number-ish level like <strong>13</strong> or <strong>13+</strong> in the arcade. Behind the scenes every chart also has an <strong>internal level</strong> — a precise decimal value like <strong>13.4</strong> — used for scoring (DX Rating) and generally agreed on by the community rather than published by SEGA. This tool matches what your camera sees against a community-maintained chart database and shows that hidden decimal next to the level you already know.</p>
       <p>Song, sheet and internal-level data comes from <a href="https://arcade-songs.zetaraku.dev/maimai/" target="_blank" rel="noopener">arcade-songs.zetaraku.dev</a> (data fetched live, client-side, from its public dataset). Internal levels are community-sourced and occasionally revised — treat them as very well-informed estimates, not official numbers. This project is unofficial and not affiliated with SEGA.</p>
-      <p>Camera OCR works best on the in-game song/difficulty select screen where the title and level are both clearly visible on screen. Every scan also compares the photo itself against known cover art (a lightweight visual fingerprint, not a network lookup of the image) — this adds confidence on top of the text match and can pick out the right song even from plain jacket art with no readable text. A “Cover match %” badge shows up when that signal is strong. If recognition still misses, use manual search instead.</p>
+      <p>Camera OCR works best on the in-game song/difficulty select screen where the title and level are both clearly visible on screen — plain jacket art alone often won't have readable text. If recognition misses, use manual search instead.</p>
     </div>
   </section>
 
