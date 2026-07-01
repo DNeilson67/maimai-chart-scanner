@@ -173,8 +173,8 @@ function applyData(data, { fromCache, cachedAt, staleFetchFailed } = {}) {
   buildMeta(data);
   buildIndex(data);
   const when = cachedAt ? new Date(cachedAt).toLocaleString() : null;
-  let text = `${state.songs.length} songs loaded · updated ${data.updateTime || '—'}`;
-  if (fromCache) text += staleFetchFailed ? ` · showing cache from ${when} (refresh failed)` : ' · from local cache';
+  let text = `${state.songs.length} songs loaded`;
+  if (fromCache && staleFetchFailed) text += ` · showing cache from ${when} (refresh failed)`;
   setDataStatus('ready', text);
 }
 
