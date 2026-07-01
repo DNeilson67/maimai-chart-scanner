@@ -855,9 +855,9 @@ function selectSong(song, opts = {}) {
 
       sc.innerHTML = `
         <div class="diff-name">${escapeHtml(meta.name || sheet.difficulty || '')}${!hasTypeChoice && typeAbbr ? ` · ${escapeHtml(typeAbbr)}` : ''}</div>
-        <div class="level-shown">${escapeHtml(sheet.level || '?')}</div>
+        <div class="level-internal${internalText != null ? '' : ' no-data'}">${escapeHtml(internalText != null ? String(internalText) : (sheet.level || '?'))}</div>
         <div class="reveal-row">
-          ${internalText != null ? `<span class="arrow">actual&nbsp;→</span><span class="internal">${escapeHtml(String(internalText))}</span>` : '<span class="arrow">no internal level data</span>'}
+          ${internalText != null ? `<span class="arrow">displayed&nbsp;→</span><span class="displayed">${escapeHtml(sheet.level || '?')}</span>` : '<span class="arrow">no internal level data</span>'}
         </div>
         <div class="sub">
           <span>${sheet.noteDesigner ? escapeHtml(sheet.noteDesigner) : ''}</span>

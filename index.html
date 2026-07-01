@@ -437,31 +437,41 @@ input[type=file]{ display:none; }
   color: var(--dc);
   font-weight: 700;
 }
-.sheet-card .level-shown{
+.sheet-card .level-internal{
   font-family: var(--font-display);
   font-weight: 900;
-  font-size: 34px;
-  margin: 6px 0 2px;
-  color: var(--text);
-  line-height:1;
-}
-.sheet-card .reveal-row{
-  display:flex;
-  align-items:baseline;
-  gap: 7px;
-  font-family: var(--font-mono);
-  font-size: 13px;
-  min-height: 20px;
-}
-.sheet-card .reveal-row .arrow{ color: var(--text-faint); font-size:11px; }
-.sheet-card .reveal-row .internal{
+  font-size: 40px;
+  margin: 6px 0 0;
   color: var(--dc);
-  font-weight: 700;
+  line-height:1;
+  text-shadow: 0 0 18px var(--dc-glow, transparent);
   opacity: 0;
   transform: translateY(4px);
   transition: opacity .35s ease, transform .35s ease;
 }
-.sheet-card.revealed .reveal-row .internal{ opacity:1; transform:none; }
+.sheet-card.revealed .level-internal{
+  opacity:1; transform:none;
+  --dc-glow: color-mix(in srgb, var(--dc) 55%, transparent);
+}
+.sheet-card .level-internal.no-data{
+  color: var(--text-faint);
+  font-size: 28px;
+}
+.sheet-card .reveal-row{
+  display:flex;
+  align-items:baseline;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  min-height: 16px;
+  margin-top: 4px;
+  color: var(--text-faint);
+}
+.sheet-card .reveal-row .arrow{ color: var(--text-faint); }
+.sheet-card .reveal-row .displayed{
+  color: var(--text-dim);
+  font-weight: 600;
+}
 .sheet-card .sub{
   margin-top: 10px;
   font-size: 11px;
@@ -634,6 +644,31 @@ footer a{ color: var(--text-dim); }
 @media (max-width: 520px){
   .song-card{ flex-direction:column; }
   .song-card .cover{ width:100%; height:160px; }
+}
+
+/* ============ Mobile tuning ============ */
+@media (max-width: 600px){
+  .wrap{ padding: 16px 12px 60px; }
+  .topbar{ padding-bottom: 16px; margin-bottom: 20px; }
+  .status-row{ width:100%; justify-content:space-between; }
+  section{ margin-bottom: 26px; }
+  .viewfinder{ width: min(84vw, 260px); height: min(84vw, 260px); }
+  .controls{ gap: 8px; }
+  .btn{ padding: 10px 14px; font-size: 13px; flex: 1 1 auto; justify-content:center; }
+  .sheet-grid{ grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 10px; }
+  .sheet-card{ padding: 13px 12px 12px; }
+  .sheet-card .level-internal{ font-size: 32px; }
+  .sheet-card .level-internal.no-data{ font-size: 24px; }
+  .type-toggle{ width:100%; overflow-x:auto; }
+  .modal{ max-height: 92vh; }
+}
+
+@media (max-width: 380px){
+  .brand h1 small{ font-size: 12px; }
+  .status-pill{ font-size: 10px; padding: 5px 8px; }
+  .sheet-grid{ grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); }
+  .sheet-card .level-internal{ font-size: 28px; }
+  .song-card .info{ min-width: 0; }
 }
 </style>
 </head>
