@@ -97,7 +97,15 @@ function grams(str, n) {
 function diceScore(a, b) {
   if (!a || !b) return 0;
   if (a === b) return 1;
-  const n = (isCjkHeavy(a) || isCjkHeavy(b)) ? 1 : 2;
+  // Short all-caps Latin titles (e.g. "HERA") only yield 2-3 bigrams, so a
+  // single misread letter can wipe out every bigram and tank the score to
+  // zero even though the word is nearly right. Stylized in-game logo fonts
+  // misread individual letters far more often than they misread whole
+  // longer words, so this case is common. Falling back to single-character
+  // comparison for short strings — the same trick already used for CJK
+  // text below — keeps one bad letter from failing the whole match.
+  const shortPair = Math.min(a.length, b.length) <= 4;
+  const n = (isCjkHeavy(a) || isCjkHeavy(b) || shortPair) ? 1 : 2;
   const A = grams(a, n);
   const B = grams(b, n);
   if (A.length === 0 || B.length === 0) return a.includes(b) || b.includes(a) ? 0.5 : 0;
@@ -639,19 +647,27 @@ async function runOcr(canvas) {
 
     const psmSparse = (Tesseract.PSM && Tesseract.PSM.SPARSE_TEXT) ?? '11';
     const psmBlock = (Tesseract.PSM && Tesseract.PSM.SINGLE_BLOCK) ?? '6';
+    const psmLine = (Tesseract.PSM && Tesseract.PSM.SINGLE_LINE) ?? '7';
 
-    // Two passes with different page-segmentation assumptions: one tuned for
-    // scattered UI text, one for a single clean block. Keeping whichever the
-    // engine itself is more confident about — plus merging the level digits
-    // spotted in *either* pass — catches more than either alone.
-    el.scanProgress.textContent = 'Reading text (pass 1/2)…';
+    // Three passes with different page-segmentation assumptions: scattered
+    // UI text, a single clean block, and a single line. The single-line
+    // pass in particular tends to rescue short, large, stylized English
+    // titles (arcade logo-style fonts) that the other two modes often
+    // misread — Tesseract's segmentation step second-guesses itself less
+    // when it's told there's exactly one line to read. All three passes'
+    // text and level digits get merged rather than picking just one winner,
+    // since confidence doesn't reliably predict which pass got a given word
+    // right.
+    el.scanProgress.textContent = 'Reading text (pass 1/3)…';
     const pass1 = await runOcrPass(worker, ocrCanvas, psmSparse);
-    el.scanProgress.textContent = 'Reading text (pass 2/2)…';
+    el.scanProgress.textContent = 'Reading text (pass 2/3)…';
     const pass2 = await runOcrPass(worker, ocrCanvas, psmBlock);
+    el.scanProgress.textContent = 'Reading text (pass 3/3)…';
+    const pass3 = await runOcrPass(worker, ocrCanvas, psmLine);
 
-    const best = pass1.meanConfidence >= pass2.meanConfidence ? pass1 : pass2;
-    const langNote = state.ocrLangs ? `[OCR languages: ${state.ocrLangs.join('+')}]\n\n` : '';
-    el.ocrText.textContent = langNote + (best.text.trim() || '(no text recognized)');
+    const passes = [pass1, pass2, pass3];
+    const best = passes.reduce((a, b) => (b.meanConfidence > a.meanConfidence ? b : a));
+    el.ocrText.textContent = best.text.trim() || '(no text recognized)';
     el.ocrDebug.classList.remove('hidden');
 
     if (!state.songs.length) {
@@ -660,8 +676,13 @@ async function runOcr(canvas) {
     }
     el.scanProgress.textContent = 'Matching against song database…';
 
-    const levelTokens = [...new Set([...extractLevelTokens(pass1.text), ...extractLevelTokens(pass2.text)])];
-    const candidates = rankSongsByText(best.text, levelTokens, 6);
+    const levelTokens = [...new Set(passes.flatMap((p) => extractLevelTokens(p.text)))];
+    // Match against all three passes' text, not just whichever the engine
+    // was more confident about — short stylized titles often get read
+    // correctly in one page-segmentation mode and mangled in another.
+    // Combining gives every candidate word a chance to be picked up.
+    const combinedText = passes.map((p) => p.text).join('\n');
+    const candidates = rankSongsByText(combinedText, levelTokens, 6);
 
     if (!candidates.length) {
       el.scanProgress.textContent = 'No confident match found — try manual search below, or retake the photo.';
